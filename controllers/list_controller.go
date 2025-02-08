@@ -127,7 +127,7 @@ func (c *ListController) AddItem(ctx *gin.Context) {
 		return
 	}
 
-	c.notifyClients("Novo item adicionado: " + item.Name)
+	c.notifyClients("Novo item adicionado: " + item.Item)
 	ctx.JSON(http.StatusOK, gin.H{"message": "Item adicionado"})
 }
 
@@ -152,7 +152,7 @@ func (c *ListController) UpdateItem(ctx *gin.Context) {
 		return
 	}
 
-	c.notifyClients("Item atualizado: " + updatedItem.Name)
+	c.notifyClients("Item atualizado: " + updatedItem.Item)
 	ctx.JSON(http.StatusOK, gin.H{"message": "Item atualizado"})
 }
 
