@@ -10,10 +10,13 @@ import (
 )
 
 func main() {
-	config.InitFirebase()
+	firestoreClient, err := config.InitFirebase()
+	if err != nil {
+		log.Fatalf("Erro ao inicializar Firebase: %v", err)
+	}
 
 	repo := repositories.NewListRepository()
-	controller := controllers.NewListController(repo)
+	controller := controllers.NewListController(repo, firestoreClient)
 
 	r := routes.SetupRouter(controller)
 

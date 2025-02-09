@@ -11,18 +11,23 @@ import (
 
 var FirestoreClient *firestore.Client
 
-func InitFirebase() {
+func InitFirebase() (*firestore.Client, error) {
 	ctx := context.Background()
-	sa := option.WithCredentialsFile("./config/key.json")
-	app, err := firebase.NewApp(ctx, nil, sa)
+
+	// Configura o Firebase
+	opt := option.WithCredentialsFile("./config/key.json") // Substitua pelo caminho correto
+	app, err := firebase.NewApp(ctx, nil, opt)
 	if err != nil {
-		log.Fatalf("Erro ao inicializar Firebase: %v", err)
+		return nil, err
 	}
 
+	// Inicializa o Firestore
 	client, err := app.Firestore(ctx)
 	if err != nil {
-		log.Fatalf("Erro ao conectar ao Firestore: %v", err)
+		return nil, err
 	}
 
 	FirestoreClient = client
+	log.Println("Firestore inicializado com sucesso")
+	return client, nil
 }
