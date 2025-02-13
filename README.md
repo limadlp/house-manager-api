@@ -100,6 +100,7 @@ DELETE /lists/{id}/items/{index}
 
 The project uses a **layered architecture**, organized as follows:
 
+```bash
 /project-root
 │── config/ # Firestore configuration
 │── controllers/ # API controllers (endpoint logic)
@@ -107,6 +108,7 @@ The project uses a **layered architecture**, organized as follows:
 │── repositories/ # Database interaction
 │── routes/ # Route definitions
 │── main.go # API initialization
+```
 
 ### ❌ Why we **DON'T** use the "usecases" layer?
 
