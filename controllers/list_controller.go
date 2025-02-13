@@ -14,6 +14,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -53,7 +54,7 @@ func (c *ListController) WebSocketHandler(ctx *gin.Context) {
 	defer conn.Close()
 
 	// Configura conexão
-	conn.SetReadLimit(512) // Limita o tamanho das mensagens
+	conn.SetReadLimit(512)
 	c.registerClient(conn)
 	defer c.unregisterClient(conn)
 
@@ -89,7 +90,6 @@ func (c *ListController) listenToFirestoreChanges() {
 	defer snapshot.Stop()
 
 	for {
-		// Aguarda o próximo snapshot
 		iter, err := snapshot.Next()
 		if err != nil {
 			log.Println("Erro ao receber snapshot do Firestore:", err)
@@ -97,7 +97,6 @@ func (c *ListController) listenToFirestoreChanges() {
 			continue
 		}
 
-		// Processa as mudanças no snapshot
 		for _, change := range iter.Changes {
 			switch change.Kind {
 			case firestore.DocumentAdded, firestore.DocumentModified:
@@ -106,20 +105,15 @@ func (c *ListController) listenToFirestoreChanges() {
 					log.Println("Erro ao decodificar lista do Firestore:", err)
 					continue
 				}
-
-				// Notifica os clientes WebSocket sobre a mudança
+				list.ID = change.Doc.Ref.ID
 				c.notifyClients(UpdateAction{
-					Type:   "UPDATE",
+					Type:   "LIST",
 					ListID: change.Doc.Ref.ID,
-					Payload: gin.H{
-						"list": list,
-					},
+					List:   list,
 				})
-
 			case firestore.DocumentRemoved:
-				// Notifica os clientes sobre a remoção de uma lista
 				c.notifyClients(UpdateAction{
-					Type:   "DELETE",
+					Type:   "LIST_DELETE",
 					ListID: change.Doc.Ref.ID,
 				})
 			}
@@ -149,14 +143,12 @@ func (c *ListController) notifyClients(update UpdateAction) {
 	}
 }
 
-// registerClient adiciona um cliente ao mapa de conexões
 func (c *ListController) registerClient(conn *websocket.Conn) {
 	c.ClientsMutex.Lock()
 	defer c.ClientsMutex.Unlock()
 	c.Clients[conn] = true
 }
 
-// unregisterClient remove um cliente do mapa de conexões
 func (c *ListController) unregisterClient(conn *websocket.Conn) {
 	c.ClientsMutex.Lock()
 	defer c.ClientsMutex.Unlock()
@@ -165,10 +157,11 @@ func (c *ListController) unregisterClient(conn *websocket.Conn) {
 
 // UpdateAction define a estrutura de uma atualização
 type UpdateAction struct {
-	Type    string      `json:"type"`    // "CREATE", "UPDATE", "DELETE"
-	ListID  string      `json:"listId"`  // ID da lista
-	ItemID  string      `json:"itemId"`  // ID do item (se aplicável)
-	Payload interface{} `json:"payload"` // Dados da atualização
+	Type   string      `json:"type"`             // "LIST_CREATE", "LIST", "LIST_DELETE", "CREATE", "UPDATE", "DELETE"
+	ListID string      `json:"listId"`           // ID da lista
+	ItemID string      `json:"itemId,omitempty"` // ID do item (se aplicável)
+	List   interface{} `json:"list,omitempty"`   // Dados da lista (se aplicável)
+	Item   interface{} `json:"item,omitempty"`   // Dados do item (se aplicável)
 }
 
 // CreateList cria uma nova lista
@@ -187,13 +180,18 @@ func (c *ListController) CreateList(ctx *gin.Context) {
 		return
 	}
 
-	// Notifica os clientes sobre a nova lista
+	list, err := c.Repo.GetListByID(id)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao obter lista criada"})
+		return
+	}
+	list.ID = id
+
+	// Notifica os clientes sobre a nova lista com objeto completo
 	c.notifyClients(UpdateAction{
-		Type:   "CREATE",
+		Type:   "LIST_CREATE",
 		ListID: id,
-		Payload: gin.H{
-			"name": req.Name,
-		},
+		List:   list,
 	})
 
 	ctx.JSON(http.StatusCreated, gin.H{"id": id})
@@ -229,6 +227,10 @@ func (c *ListController) AddItem(ctx *gin.Context) {
 		return
 	}
 
+	// Gera um ID único para o item e define a data de criação
+	item.ID = uuid.New().String()
+	item.Created = time.Now()
+
 	err := c.Repo.AddItem(listID, item)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao adicionar item"})
@@ -237,11 +239,10 @@ func (c *ListController) AddItem(ctx *gin.Context) {
 
 	// Notifica os clientes sobre o novo item
 	c.notifyClients(UpdateAction{
-		Type:   "ADD",
+		Type:   "CREATE",
 		ListID: listID,
-		Payload: gin.H{
-			"item": item,
-		},
+		ItemID: item.ID,
+		Item:   item,
 	})
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "Item adicionado"})
@@ -262,20 +263,30 @@ func (c *ListController) UpdateItem(ctx *gin.Context) {
 		return
 	}
 
+	// Recupera a lista atual para preservar o ID original do item
+	list, err := c.Repo.GetListByID(listID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao buscar lista"})
+		return
+	}
+	if index < 0 || index >= len(list.Items) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Índice fora dos limites"})
+		return
+	}
+	updatedItem.ID = list.Items[index].ID
+
 	err = c.Repo.UpdateItem(listID, index, updatedItem)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao atualizar item"})
 		return
 	}
 
-	// Notifica os clientes sobre a atualização
+	// Notifica os clientes sobre a atualização do item
 	c.notifyClients(UpdateAction{
 		Type:   "UPDATE",
 		ListID: listID,
-		Payload: gin.H{
-			"index": index,
-			"item":  updatedItem,
-		},
+		ItemID: updatedItem.ID,
+		Item:   updatedItem,
 	})
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "Item atualizado"})
@@ -290,19 +301,29 @@ func (c *ListController) RemoveItem(ctx *gin.Context) {
 		return
 	}
 
+	// Recupera a lista para obter o ID do item que será removido
+	list, err := c.Repo.GetListByID(listID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao buscar lista"})
+		return
+	}
+	if index < 0 || index >= len(list.Items) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Índice fora dos limites"})
+		return
+	}
+	removedItemID := list.Items[index].ID
+
 	err = c.Repo.RemoveItem(listID, index)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao remover item"})
 		return
 	}
 
-	// Notifica os clientes sobre a remoção
+	// Notifica os clientes sobre a remoção do item
 	c.notifyClients(UpdateAction{
 		Type:   "DELETE",
 		ListID: listID,
-		Payload: gin.H{
-			"index": index,
-		},
+		ItemID: removedItemID,
 	})
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "Item removido"})
